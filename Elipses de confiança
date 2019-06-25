@@ -1,0 +1,175 @@
+## Montando as Matrizes de M e S para cada grupo de genótipo
+
+M=log2(alleleA_chr1)-log2(alleleB_chr1)  ### Matriz de intensidade com a transformação M
+
+S=(log2(alleleA_chr1)+log2(alleleB_chr1))/2  ### Matriz de intensidade com a transformação S
+
+## criar uma nova coluna na base de informação dos SNP indicando o alelo A e B
+
+snpinfo$g1=with(snpinfo, paste(allele_a, allele_a, sep = "")) 
+
+snpinfo$g2=with(snpinfo, paste(allele_a, allele_b, sep = ""))
+
+snpinfo$g3=with(snpinfo, paste(allele_b, allele_b, sep = ""))
+
+### Montando uma matriz com os dados da média da log-intensidade
+matriz_S=matrix(nrow = nrow(snpinfo), ncol = 3)
+
+rownames(matriz_S)=rownames(snpinfo)
+
+colnames(matriz_S)=c("S_AA", "S_AB", "S_BB")
+
+
+### Montando uma matriz com os dados da média da log-razão
+
+matriz_M=matrix(nrow = nrow(snpinfo), ncol = 3)
+
+rownames(matriz_M)=rownames(snpinfo)
+
+colnames(matriz_M)=c("M_AA", "M_AB", "M_BB")
+
+
+### completando as matrizes com os respetivos dados ###
+
+for(i in 1:nrow(snpinfo)){
+  
+  Media_S= tapply(S[i,] , as.character(gtypes[i,3:1134]),mean )
+  
+  v_S=as.character(snpinfo[i, c("g1", "g2", "g3")])
+  
+  matriz_S[i,]=Media_S[v_S] 
+  
+  Media_M= tapply(M[i,], as.character(gtypes[i,3:1134]),mean )
+  
+  v_M=as.character(snpinfo[i, c("g1", "g2", "g3")])
+  
+  matriz_M[i,]=Media_M[v_M]
+}
+
+Medias_M_S=cbind(matriz_M[,1], matriz_S[,1],matriz_M[,2], matriz_S[,2],matriz_M[,3], matriz_S[,3]) ## juntando as 2 matrizes em uma só
+colnames(Medias_M_S)=c("M_AA", "S_AA", "M_AB", "S_AB", "M_BB", "S_BB")
+rownames(Medias_M_S)=snpinfo$man_fsetid
+all(rownames(A)==rownames(Medias_M_S))
+
+### Omitir os valores missing da matriz 
+omit=na.omit(Medias_M_S)
+dim(omit)
+head(omit)
+omit=as.data.frame(omit)
+
+##### Padronzando as matrizes de dados para podermos predizer o grupo desejado ####
+M_AA=omit
+M_AB=cbind(omit$M_AB, omit$S_AB, omit$M_AA, omit$S_AA, omit$M_BB, omit$S_BB)
+colnames(M_AB)=c("M_AB", "S_AB", "M_AA", "S_AA", "M_BB", "S_BB")
+rownames(M_AB)=rownames(M_AA)
+M_BB=cbind(omit$M_BB, omit$S_BB, omit$M_AB, omit$S_AB, omit$M_AA, omit$S_AA)
+colnames(M_BB)=c("M_BB", "S_BB", "M_AB", "S_AB", "M_AA", "S_AA")
+rownames(M_BB)=rownames(M_AA)
+
+
+##### Estimar parâmetros quando temos 1 grupo de genótipo faltando #######
+
+EstimaF1g=function(M, j){
+  sigma=cov(M)  #### Matriz de covariancia
+  mu=colMeans(M)  ### Vetor de medias
+  
+  sigma11=sigma[1:2,c(1:2)]  
+  sigma12=sigma[1:2, c(3:6)]
+  sigma21=t(sigma12)
+  sigma22=sigma[3:6,c(3:6)]
+  inversa22=solve(sigma22)  # inversa da matriz de covariancia
+  
+  mu1=matrix(c(mu[1], mu[2]), nrow = 1, ncol = 2)
+  mu2=matrix(mu[3:6], nrow = 1, ncol = 4)
+  
+  Beta1=sigma12%*%inversa22 ### calculando o beta1 estimado 
+  Beta0=t(mu1)-(sigma12%*%inversa22%*%t(mu2))  ### calculando o beta0 estimado
+  
+ #x_t=t(t(M[j, 3:6])) ## utilizar quando for estimar o grupo AA ou seja quando utilizar M_AB e M_BB para estima M_AA
+ 
+ x_t=t(M[j, 3:6]) #### Os valores de entrada
+ 
+  y=Beta0 + (Beta1%*%x_t) ### OS valores de M_AA e S_AA estimados
+  
+  covar=sigma11-(sigma12%*%inversa22%*%sigma21)  ### covariancia estimada
+  
+ EM=(sum((t(M[j, 1:2])-y)^2)) ## calcular o erro médio
+ 
+ #EM=(sum((t(t(M[j, 1:2]))-y)^2)) ##calcular o erro médio quando utilizar M_AB e M_BB para estima M_AA
+  
+  return(list(M_S_estimados=y, matriz_covar=covar, betas=cbind(Beta0, Beta1), EQM=EM))
+}
+
+
+snp="SNP_A-1795101"  ### indicar o SNP que quero calcular as elipses de confiança
+
+j=which(rownames(omit)==snp)
+
+EstimaF1g(M_AA, j)  ### estimando os parâmetros do grupo de genótipo faltante
+EstimaF1g(M_AB, j)
+EstimaF1g(M_BB, j)
+
+
+
+################## Gráfico para visualizar os 3 grupos de Genótipos ##############
+install.packages("ellipse")
+library(ellipse)
+
+snpinfo$g1=with(snpinfo, paste(allele_a, allele_a, sep = "")) 
+snpinfo$g2=with(snpinfo, paste(allele_a, allele_b, sep = ""))
+snpinfo$g3=with(snpinfo, paste(allele_b, allele_b, sep = ""))
+
+plotar=function(snp, i, j){
+  
+  AA=as.character(snpinfo[i, c("g1", "g2", "g3")])[1]
+  aa=which(as.character(gtypes[i,])==AA) ### selecionando o snp com genótipo igual ao encontrado no snpinfo e guardado no AA
+  datAA=(cbind(S[i,aa], M[i,aa]))  ## fazendo uma tabela com as medias de M e S do snp i
+  par(cex=1)
+  plot(S[i,], M[i,], col=factor(as.character(gtypes[i,])), xlab = "S", ylab = "M", main = paste("Gráfico M vs S", "i"=rownames(S)[i], sep = "-"), pch=c(16)) ## plotando o gráfico de s vs m
+  lines(ellipse(cov(datAA), centre=colMeans(datAA)), col=1)  ## plotando a elipse 
+  text(centre[1], centre[2]+0.5,  AA, cex=1, pos=3,col=1)
+  centro_AA=c(EstimaF1g(M_AA, j)$M_S_estimados[2,], EstimaF1g(M_AA, j)$M_S_estimados[1,])  ## mostrando a média e a covariância estimadas
+  cov_AA=matrix(c(EstimaF1g(M_AA, j)$matriz_covar[2,2], 
+                  EstimaF1g(M_AA, j)$matriz_covar[1,2], 
+                  EstimaF1g(M_AA, j)$matriz_covar[2,1], 
+                  EstimaF1g(M_AA, j)$matriz_covar[1,1]), 
+                ncol = 2, nrow = 2, byrow=TRUE) 
+  lines(ellipse(cov_AA, centre=centro_AA), col=1,lty=3, cex=3)
+  
+  AB=as.character(snpinfo[i, c("g1", "g2", "g3")])[2]
+  ab=which(as.character(gtypes[i,])==AB) ### selecionando o snp com genótipo igual ao encontrado no snpinfo e guardado no AB
+  datAB=(cbind(S[i,ab], M[i,ab]))  ## fazendo uma tabela com as medias de M e S do snp i
+  lines(ellipse(cov(datAB), centre=colMeans(datAB)), col=2) ## plotando a elipse 
+  text(colMeans(datAB)[1], colMeans(datAB)[2]+0.5,  AB, cex=1, pos=3,col=2)
+  centro_AB=c(EstimaF1g(M_AB, j)$M_S_estimados[2,], EstimaF1g(M_AB, j)$M_S_estimados[1,])  ## mostrando a média e a covariância estimadas
+  cov_AB=matrix(c(EstimaF1g(M_AB, j)$matriz_covar[2,2], 
+                  EstimaF1g(M_AB, j)$matriz_covar[1,2], 
+                  EstimaF1g(M_AB, j)$matriz_covar[2,1], 
+                  EstimaF1g(M_AB, j)$matriz_covar[1,1]), 
+                ncol = 2, nrow = 2, byrow=TRUE) 
+  lines(ellipse(cov_AB, centre=centro_AB), col=2,lty=3)
+  
+  
+  BB=as.character(snpinfo[i, c("g1", "g2", "g3")])[3]
+  bb=which(as.character(gtypes[i, ])==BB) ### selecionando o snp com genótipo igual ao encontrado no snpinfo e guardado no BB
+  datBB=(cbind(S[i,bb], M[i,bb]))  ## fazendo uma tabela com as medias de M e S do snp i
+  lines(ellipse(cov(datBB), centre=colMeans(datBB)), col=3) ## plotando a elipse 
+  text(colMeans(datBB), colMeans(datBB)[2]+0.5,  BB, cex=1, pos=3,col=3)
+  centro_BB=c(EstimaF1g(M_BB, j)$M_S_estimados[2,], EstimaF1g(M_BB, j)$M_S_estimados[1,])  ## mostrando a média e a covariância estimadas
+  cov_BB=matrix(c(EstimaF1g(M_BB, j)$matriz_covar[2,2], 
+                  EstimaF1g(M_BB, j)$matriz_covar[1,2], 
+                  EstimaF1g(M_BB, j)$matriz_covar[2,1], 
+                  EstimaF1g(M_BB, j)$matriz_covar[1,1]), 
+                ncol = 2, nrow = 2, byrow=TRUE) 
+  
+  lines(ellipse(cov_BB, centre=centro_BB), col=3,lty=3)
+  
+}
+
+snp="SNP_A-1795101"  
+
+j=which(rownames(omit)==snp)
+
+i=j
+
+plotar(snp, i, j)
